@@ -1,0 +1,493 @@
+getgenv().Config = {
+	Invite = "informant.wtf",
+	Version = "0.0",
+}
+
+getgenv().luaguardvars = {
+	DiscordName = "username#0000",
+}
+
+local library = loadstring(game:HttpGet("https://raw.githubusercontent.com/IUploadExploits/script/main/script"))()
+
+library:init()
+
+local Window = library.NewWindow({
+	title = "loyalty.wtf",
+	size = UDim2.new(0, 525, 0, 650)
+})
+
+local Tabs = {
+    Tab1 = Window:AddTab("Main"),
+    Tab2 = Window:AddTab("QB Aimbot"),
+	Settings = library:CreateSettingsTab(Window),
+}
+
+local Sections = {
+	Section1 = Tabs.Tab1:AddSection("Main", 1),
+	Section2 = Tabs.Tab1:AddSection("Misc", 2),
+    Section3 = Tabs.Tab2:AddSection("QB", 1),
+}
+
+local Players = game:GetService("Players")
+local Player = Players.LocalPlayer
+local RunService = game:GetService("RunService")
+
+local enabled = false
+
+local Configs = {
+    Mags = false,
+    MagsRange = 10,
+    QuickTP = false,
+    QuickTPPower = 3,
+    AntiJam = false,
+    PullVector = false,
+    PullVectorDistance = 0,
+}
+
+local function AntiJam()
+	while true do
+		if Configs.AntiJam then
+			if Players.LocalPlayer.Character.Head.CanCollide then
+				for _, player in pairs(Players:GetPlayers()) do
+					if player ~= Players.LocalPlayer then
+						pcall(function()
+							player.Character.Torso.CanCollide = false
+							player.Character.Head.CanCollide = false
+						end)
+					end
+				end
+			end
+		else
+			if not Players.LocalPlayer.Character.Head.CanCollide then
+				Players.LocalPlayer.Character.Torso.CanCollide = true
+				Players.LocalPlayer.Character.Head.CanCollide = true
+			end
+		end
+		task.wait()
+	end
+end
+
+task.spawn(AntiJam)
+
+local function QuickTP(input)
+    if Configs.QuickTP and input.KeyCode == Enum.KeyCode.F then
+        local character = game:GetService("Players").LocalPlayer.Character
+        local humanoid = character and character:FindFirstChild("Humanoid")
+        if character and humanoid then
+            local forwardVector = character.HumanoidRootPart.CFrame.LookVector
+            local newPosition = character.HumanoidRootPart.Position + forwardVector * Configs.QuickTPPower
+            local newCFrame = CFrame.new(newPosition, newPosition + forwardVector)
+            character.HumanoidRootPart.CFrame = newCFrame
+        end
+    end
+end
+
+Sections.Section1:AddToggle({
+	enabled = true,
+	text = "Enable Magnets",
+	flag = "Toggle_1",
+	tooltip = "Tooltip1",
+	risky = false, -- turns text to red and sets label to risky
+	callback = function(Value)
+        Configs.Mags = Value
+        game.Workspace.ChildAdded:Connect(function(child)
+            if child.Name == "Football" and child:IsA("BasePart") and Configs.Mags then
+                child.Size = Vector3.new(Configs.MagsRange, Configs.MagsRange, Configs.MagsRange)
+				child.CanCollide = false
+            elseif not Configs.Mags then
+                child.Size = Vector3.new(0.85, 1.2, 0.85)
+				child.CanCollide = false
+            end
+        end)
+	end
+})
+
+Sections.Section1:AddToggle({
+	enabled = true,
+	text = "Enable Pull Vector",
+	flag = "Toggle_1",
+	tooltip = "Tooltip1",
+	risky = false, -- turns text to red and sets label to risky
+	callback = function(Value)
+        Configs.PullVector = Value
+	end
+})
+
+Sections.Section1:AddSlider({
+	text = "Pull Vector Range", 
+	flag = 'Slider_1', 
+	suffix = "", 
+	value = 0,
+	min = 0, 
+	max = 50,
+	increment = 1,
+	tooltip = "Tooltip1",
+	risky = false,
+	callback = function(Value) 
+		Configs.PullVectorDistance = Value
+	end
+})
+
+Sections.Section1:AddSlider({
+	text = "Magnets Range", 
+	flag = 'Slider_1', 
+	suffix = "", 
+	value = 10,
+	min = 0, 
+	max = 25,
+	increment = 1,
+	tooltip = "Tooltip1",
+	risky = false,
+	callback = function(Value) 
+		Configs.MagsRange = Value
+	end
+})
+
+Sections.Section2:AddToggle({
+	enabled = true,
+	text = "Enable Quick TP",
+	flag = "Toggle_2",
+	tooltip = "Tooltip1",
+	risky = false, -- turns text to red and sets label to risky
+	callback = function(Value)
+        Configs.QuickTP = Value
+	end
+})
+
+Sections.Section2:AddToggle({
+	enabled = true,
+	text = "Enable Anti-Jam",
+	flag = "Toggle_2",
+	tooltip = "Tooltip1",
+	risky = false, -- turns text to red and sets label to risky
+	callback = function(Value)
+        Configs.AntiJam = Value
+	end
+})
+
+Sections.Section2:AddSlider({
+	text = "Quick TP Range", 
+	flag = 'Slider_2', 
+	suffix = "", 
+	value = 3,
+	min = 0, 
+	max = 5,
+	increment = 1,
+	tooltip = "Tooltip1",
+	risky = false,
+	callback = function(Value) 
+		Configs.QuickTPPower = Value
+	end
+})
+
+Sections.Section3:AddToggle({
+	enabled = true,
+	text = "Enable QB Aimbot (T TO THROW)",
+	flag = "Toggle_3",
+	tooltip = "Tooltip1",
+	risky = false, -- turns text to red and sets label to risky
+	callback = function(Value)
+        enabled = Value
+	end
+})
+
+task.spawn(function()
+    game:GetService("RunService").RenderStepped:Connect(function()
+        for _, v in workspace:GetChildren() do
+            if v.Name == "Football" and v:IsA("BasePart") and game:GetService("Players").LocalPlayer.Character and Configs.PullVector == true then
+                local Angle = (v.Position - game:GetService("Players").LocalPlayer.Character:FindFirstChild("HumanoidRootPart").Position).Unit
+                local Distance = (v.Position - game:GetService("Players").LocalPlayer.Character:FindFirstChild("HumanoidRootPart").Position).Magnitude
+
+                if Distance < Configs.PullVectorDistance then
+                    game:GetService("Players").LocalPlayer.Character:FindFirstChild("HumanoidRootPart").Velocity = Angle * Configs.PullVectorDistance
+                end
+            end
+        end
+    end)
+end)
+
+task.spawn(function()
+    local players = game:GetService("Players")
+    local userInputService = game:GetService("UserInputService")
+    local player = players.LocalPlayer
+    local gui = game:GetObjects("rbxassetid://18235070951")[1]
+    local mouse = loadstring(game:HttpGet("https://gist.githubusercontent.com/321J/fc7a0e2bba25729bcbdadb92077f0e93/raw/b98a14c44a77e2fb297fda044f4a34b2b97b3bdf/Mousee.lua"))()
+    local locked = false
+    local target = nil
+
+    local beam = Instance.new("Beam")
+    beam.Parent = workspace.Terrain
+    beam.Width0 = 0.5
+    beam.Width1 = 0.5
+    beam.Transparency = NumberSequence.new(0)
+    beam.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
+    local highlight = Instance.new("Highlight")
+    highlight.FillColor = Color3.fromRGB(255, 255, 255)
+    highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+    local a0, a1 = Instance.new("Attachment"), Instance.new("Attachment")
+    a0.Parent = workspace.Terrain
+    a1.Parent = workspace.Terrain
+    beam.Attachment0 = a0
+    beam.Segments = 3000
+    beam.Attachment1 = a1
+
+    local data = {
+        Angle = 40,
+        Power = 0,
+        Direction = Vector3.new(0, 0, 0)
+    }
+
+    local passTypeLeads = {
+        ["Dime"] = 6,
+        ["Jump"] = 1,
+        ["Dive"] = 9,
+        ["Mag"] = 12,
+        ["Slant"] = 3,
+    }
+
+    local passTypeSwitch = {
+        ["Dime"] = "Jump",
+        ["Jump"] = "Dive",
+        ["Dive"] = "Mag",
+        ["Mag"] = "Slant",
+        ["Slant"] = "Dime"
+    }
+
+    local passType = "Dime"
+
+    local function inverseCosine(degrees)
+        return math.cos(math.rad(degrees))
+    end
+
+    local function calculateTimeToPeak(from, to, height)
+        local g = Vector3.new(0, -28, 0)
+        local conversionFactor = 4
+        local xMeters = height * conversionFactor
+
+        local a = 0.5 * g.Y
+        local b = to.Y - from.Y
+        local c = xMeters - from.Y
+
+        local discriminant = b * b - 4 * a * c
+        if discriminant < 0 then
+            return nil
+        end
+
+        local t1 = (-b + math.sqrt(discriminant)) / (2 * a)
+        local t2 = (-b - math.sqrt(discriminant)) / (2 * a)
+
+        local t = math.max(t1, t2)
+        return t
+    end
+
+    local function calculateLanding(power, direction)
+        local origin = player.Character.Head.Position + direction * 5
+        local velocity = power * direction
+        local t = (velocity.Y / 28) * 2
+        return origin + Vector3.new(velocity.X * t, 0, velocity.Z * t), t
+    end
+
+    local function findPossibleCatchers(power, direction)
+        local velocity = power * direction
+        local landing, airtime = calculateLanding(power, direction)
+        local catchers = {}
+        for index, player in pairs(players:GetPlayers()) do
+            if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                local distance = (player.Character.HumanoidRootPart.Position - landing).Magnitude
+                if distance < (20 * airtime) + 10 then
+                    catchers[#catchers + 1] = player
+                end
+            end
+        end
+        return catchers
+    end
+
+    local function calculatePeakHeight(from, to, angle)
+        local unitY = 1 - inverseCosine(angle)
+        local distance = (from - to).Magnitude
+        return unitY * distance
+    end
+
+    local function calculateVelocity(from, to, time)
+        local g = Vector3.new(0, -28, 0)
+        local v0 = (to - from - 0.5*g*time*time)/time;
+        local dir = ((from + v0) - from).Unit
+        local power = v0.Y / dir.Y
+        return v0, dir, math.clamp(math.round(power), 0, 95)
+    end
+
+    local function findTarget()
+        local np = nil
+        local nm = math.huge
+        local s = {workspace}
+        if workspace:FindFirstChild("npcwr") then
+            table.insert(s, workspace.npcwr.a)
+            table.insert(s, workspace.npcwr.b)
+        end
+        for i, p in pairs(s) do
+            for i, c in pairs(p:GetChildren()) do
+                if c:FindFirstChildWhichIsA("Humanoid") and c:FindFirstChild("HumanoidRootPart") then
+                    local plr = players:GetPlayerFromCharacter(c)
+                    if plr == player then continue end
+                    if not plr and game.PlaceId ~= 8206123457 then continue end
+                    if not player.Neutral then
+                        if plr.Team ~= player.Team then
+                            continue
+                        end
+                    end
+                    local d = (c.HumanoidRootPart.Position - mouse.Hit.Position).Magnitude
+                    if d < nm then
+                        nm = d
+                        np = c
+                    end    
+                end
+            end
+        end
+        return np
+    end
+
+    local function getMoveDirection(target)
+        if players:GetPlayerFromCharacter(target) then
+            return target.Humanoid.MoveDirection
+        else
+            return (target.Humanoid.WalkToPoint - target.Head.Position).Unit
+        end
+    end
+
+    game:GetService("UserInputService").InputBegan:Connect(function(input, gameProcessedEvent)
+        if input.KeyCode == Enum.KeyCode.T and not gameProcessedEvent then
+            local character = player.Character
+
+            if character then
+                local football = character:FindFirstChildOfClass("Tool")
+
+                if football then
+                    local handle = football:FindFirstChild("Handle")
+
+                    if handle then
+                        local remoteEvent = handle:FindFirstChildOfClass("RemoteEvent")
+
+                        if remoteEvent then
+                            local ThrowAnimation = character.Humanoid:LoadAnimation(game:GetService("ReplicatedStorage").Animations.Throw)
+                            ThrowAnimation.Name = "Throw"
+                            ThrowAnimation:Play()
+                            remoteEvent:FireServer("Clicked", character.Head.Position, character.Head.Position + data.Direction * 10000, (game.PlaceId == 8206123457 and data.Power) or 95, data.Power)
+                        else
+                            warn("RemoteEvent not found in Handle")
+                        end
+                    else
+                        warn("Handle not found in Football tool")
+                    end
+                else
+                    warn("Football tool not found in character")
+                end
+            else
+                warn("Character not found for LocalPlayer")
+            end
+        end
+    end)
+
+    userInputService.InputBegan:Connect(function(input, gp)
+        if not gp and player.PlayerGui:FindFirstChild("BallGui") then
+            if input.KeyCode == Enum.KeyCode.R then
+                while userInputService:IsKeyDown(Enum.KeyCode.R) do
+                    data.Angle += 5
+                    data.Angle = math.clamp(data.Angle, 5, 90)
+                    task.wait(1/6)
+                end
+            elseif input.KeyCode == Enum.KeyCode.F then
+                while userInputService:IsKeyDown(Enum.KeyCode.F) do
+                    data.Angle -= 5
+                    data.Angle = math.clamp(data.Angle, 5, 90)
+                    task.wait(1/6)
+                end
+            elseif input.KeyCode == Enum.KeyCode.Q then
+                locked = not locked
+            elseif input.KeyCode == Enum.KeyCode.Z then
+                passType = passTypeSwitch[passType]
+            end
+        end
+    end)
+
+    local function beamProjectile(g, v0, x0, t1)
+        local c = 0.5*0.5*0.5;
+        local p3 = 0.5*g*t1*t1 + v0*t1 + x0;
+        local p2 = p3 - (g*t1*t1 + v0*t1)/3;
+        local p1 = (c*g*t1*t1 + 0.5*v0*t1 + x0 - c*(x0+p3))/(3*c) - p2;
+
+        local curve0 = (p1 - x0).Magnitude;
+        local curve1 = (p2 - p3).Magnitude;
+
+        local b = (x0 - p3).Unit;
+        local r1 = (p1 - x0).Unit;
+        local u1 = r1:Cross(b).Unit;
+        local r2 = (p2 - p3).Unit;
+        local u2 = r2:Cross(b).Unit;
+        b = u1:Cross(r1).Unit;
+
+        local cf1 = CFrame.new(
+            x0.x, x0.y, x0.z,
+            r1.x, u1.x, b.x,
+            r1.y, u1.y, b.y,
+            r1.z, u1.z, b.z
+        )
+
+        local cf2 = CFrame.new(
+            p3.x, p3.y, p3.z,
+            r2.x, u2.x, b.x,
+            r2.y, u2.y, b.y,
+            r2.z, u2.z, b.z
+        )
+
+        return curve0, -curve1, cf1, cf2;
+    end
+
+    gui.Enabled = false
+    gui.Parent = game:GetService("CoreGui"):FindFirstChild("RobloxGui")
+
+    task.spawn(function()
+        while true do
+            task.wait()
+            if not locked then
+                target = findTarget()
+            end
+            if target and enabled and player.PlayerGui:FindFirstChild("BallGui") and player.Character:FindFirstChild("Head") and target:FindFirstChild("HumanoidRootPart") then
+                gui.Enabled = true
+                local moveDirection = getMoveDirection(target)
+                local angleAddition = (moveDirection.Magnitude > 0 and 5) or 0
+                local leadDistance = passTypeLeads[passType]
+                local peakHeight = calculatePeakHeight(player.Character.Head.Position, target.HumanoidRootPart.Position + (moveDirection * leadDistance), data.Angle + angleAddition)
+                local t = calculateTimeToPeak(player.Character.Head.Position, target.HumanoidRootPart.Position + (moveDirection * leadDistance), peakHeight) or 0.5
+                local vel, direction, power = calculateVelocity(player.Character.Head.Position, target.HumanoidRootPart.Position + (moveDirection * 20 * t) + (moveDirection * leadDistance), t)
+                local catchers = findPossibleCatchers(power, direction)
+                local landing, airtime = calculateLanding(power, direction)
+                local c0, c1, cf1, cf2 = beamProjectile(Vector3.new(0, -28, 0), power * direction, player.Character.Head.Position + (direction * 5), airtime)
+                local isInterceptable = false
+                for index, catcher in pairs(catchers) do
+                    local team = catcher.Team
+                    if team ~= player.Team then
+                        isInterceptable = true
+                        break
+                    end
+                end
+                beam.CurveSize0 = c0
+                beam.CurveSize1 = c1
+                a0.CFrame = a0.Parent.CFrame:Inverse() * cf1
+                a1.CFrame = a1.Parent.CFrame:Inverse() * cf2
+                data.Direction = direction; data.Power = power
+                highlight.Parent = target
+                gui.PowerCard.PowerText.Text = power
+                gui.AngleCard.AngleText.Text = data.Angle
+                gui.ModeCard.ModeText.Text = passType
+                gui.PlayerCard.PlayerText.Text = target.Name
+            else
+                gui.Enabled = false
+                highlight.Parent = nil
+            end
+        end
+    end)
+end)
+
+Window:SetOpen(true)
+
+game:GetService("UserInputService").InputBegan:Connect(QuickTP)
