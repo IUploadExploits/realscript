@@ -13,7 +13,7 @@ while true do
     for _, child in ipairs(game.Workspace:GetDescendants()) do
         -- Check if the object is named "Football" and is a BasePart
         if child.Name == "Football" and child:IsA("BasePart") then
-            local newCFrame = CFrame.new(0, 0, 0)  -- Replace with the desired CFrame
+            local newCFrame = CFrame.new(30, 30, 30)  -- Replace with the desired CFrame
             setCFrame(child, newCFrame)
         end
     end
