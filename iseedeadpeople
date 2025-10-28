@@ -1,21 +1,1001 @@
--- Function to safely set CFrame of a BasePart object
-local function setCFrame(object, cframe)
-    if object:IsA("BasePart") then
-        object.CFrame = cframe
-    else
-        warn("Object is not a BasePart:", object:GetFullName())
+-- [[ Services & Vars ]]
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
+local Camera = workspace.CurrentCamera
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local CoreGui = game:GetService("CoreGui")
+local SoundService = game:GetService("SoundService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local MainEvent = ReplicatedStorage:FindFirstChild('MainEvent') or nil
+local newcclosure = newcclosure or function(f) return f end
+
+-- [[ Cached Configs ]]
+local conditionsConfig = Config['Conditions']
+local silentConfig = Config['Silent Aimbot']
+local cameraConfig = Config['Camera Aimbot']
+local triggerConfig = Config['Trigger Bot']
+local spreadConfig = Config['Spread Modifications']
+local hitboxConfig = Config['Hitbox Expander']
+local macroConfig = Config['Normal Macro']
+local noclipMacroConfig = Config['Noclip Macro']
+
+-- [[ Cached KeyCodes ]]
+local cameraKey = Enum.KeyCode[cameraConfig['Configurations']['Bind']['Key']]
+local triggerKey = Enum.KeyCode[triggerConfig['Keybind']['Key']]
+local macroKey = Enum.KeyCode[macroConfig['Keybind']['Key']]
+local noclipKey = Enum.KeyCode[noclipMacroConfig['Keybind']['Key']]
+local spreadKey = Enum.KeyCode.J
+local cleanupKey = Enum.KeyCode.End
+
+-- [[ Head Settings ]]
+local HeadSettings = {
+    HeadPartName = 'Head',
+    HeadOffsetScale = 0.8,
+}
+
+-- [[ Adornments ]]
+local silentFovBox = Instance.new("BoxHandleAdornment")
+silentFovBox.Color3 = Color3.fromRGB(255, 0, 0)
+silentFovBox.Transparency = 0.5
+silentFovBox.AlwaysOnTop = false
+silentFovBox.ZIndex = 1
+silentFovBox.Adornee = nil
+silentFovBox.Visible = false
+silentFovBox.Parent = CoreGui
+local silentFovSize = Vector3.new(silentConfig['FOV']['X'], silentConfig['FOV']['Y'], silentConfig['FOV']['Z'])
+
+local cameraFovBox = Instance.new("BoxHandleAdornment")
+cameraFovBox.Color3 = Color3.fromRGB(0, 255, 0)
+cameraFovBox.Transparency = 0.5
+cameraFovBox.AlwaysOnTop = false
+cameraFovBox.ZIndex = 1
+cameraFovBox.Adornee = nil
+cameraFovBox.Visible = false
+cameraFovBox.Parent = CoreGui
+local cameraFovSize = Vector3.new(cameraConfig['FOV']['X'], cameraConfig['FOV']['Y'], cameraConfig['FOV']['Z'])
+
+-- [[ States ]]
+local lastUpdate = 0
+local updateInterval = 0.2
+local lastAutoGetUp = 0
+local autoGetUpInterval = 0.1
+local lastSpreadToggle = 0
+local toggleDebounce = 0.1
+local originalSizes = {}
+local macroActive = false
+local macro_in_use = false
+local last_macro_instruction = 0
+local noClipActive = false
+local lastNoClipToggle = 0
+local spreadModActive = true
+local lastGunName = nil
+local lastEquippedGun = nil
+local visibilityCache = {} -- { [character] = { time, result } }
+local Plr = nil
+local Locking = false
+local lockCooldown = 0
+local aimAssistToggleState = false
+
+-- [[ Fast Elastic Easing ]]
+local function FastElasticEase(t)
+    if t <= 0 then return 0 end
+    if t >= 1 then return 1 end
+    t = t / 2
+    local p = 0.3
+    local s = p / 4
+    return 1 + 2^(-10 * t) * math.sin((t - s) * (2 * math.pi) / p)
+end
+
+-- [[ Point Generation Cache ]]
+local offsetsCache = setmetatable({}, { __mode = "k" })
+local function generateOffsetsForPart(part, div)
+    if div <= 1 then return { Vector3.new(0, 0, 0) } end
+    local cache = offsetsCache[part]
+    if cache and cache.size == part.Size and cache.div == div then
+        return cache.offsets
+    end
+    local offsets = {}
+    for ix = 0, div - 1 do
+        local nx = (ix / (div - 1)) - 0.5
+        for iy = 0, div - 1 do
+            local ny = (iy / (div - 1)) - 0.5
+            for iz = 0, div - 1 do
+                local nz = (iz / (div - 1)) - 0.5
+                local localOffset = Vector3.new(nx * part.Size.X, ny * part.Size.Y, nz * part.Size.Z)
+                if part.Name == HeadSettings.HeadPartName then
+                    localOffset = localOffset * HeadSettings.HeadOffsetScale
+                end
+                table.insert(offsets, localOffset)
+            end
+        end
+    end
+    offsetsCache[part] = { size = part.Size, div = div, offsets = offsets }
+    return offsets
+end
+
+-- [[ Player Validation ]]
+local function IsValidTarget(character)
+    if not character or not character.Parent then return false end
+    if conditionsConfig.Knocked then
+        local bodyEffects = character:FindFirstChild('BodyEffects')
+        if bodyEffects and (bodyEffects:FindFirstChild('K.O') or bodyEffects:FindFirstChild('KO')) and bodyEffects[bodyEffects:FindFirstChild('K.O') and 'K.O' or 'KO'].Value then
+            return false
+        end
+    end
+    if conditionsConfig.Reloading then
+        local localCharacter = LocalPlayer.Character
+        if localCharacter and localCharacter:FindFirstChild('BodyEffects') and localCharacter.BodyEffects:FindFirstChild('Reload') and localCharacter.BodyEffects.Reload.Value then
+            return false
+        end
+    end
+    if conditionsConfig.Visible then
+        local cache = visibilityCache[character]
+        local currentTime = tick()
+        if cache and currentTime - cache.time < 0.5 then
+            return cache.result
+        end
+        local hrp = character:FindFirstChild("HumanoidRootPart") or character.PrimaryPart
+        if hrp then
+            local rayOrigin = Camera.CFrame.Position
+            local rayDirection = (hrp.Position - rayOrigin).Unit * 100
+            local raycastParams = RaycastParams.new()
+            raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+            raycastParams.FilterDescendantsInstances = {LocalPlayer.Character}
+            local raycastResult = workspace:Raycast(rayOrigin, rayDirection, raycastParams)
+            local result = not (raycastResult and raycastResult.Instance and raycastResult.Instance:FindFirstAncestorOfClass("Model") ~= character)
+            visibilityCache[character] = { time = currentTime, result = result }
+            return result
+        end
+        return false
+    end
+    if conditionsConfig.Protected then
+        if character:FindFirstChildOfClass("ForceField") then return false end
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if humanoid and humanoid:GetAttribute("LastRespawnTime") and (tick() - humanoid:GetAttribute("LastRespawnTime")) < 6 then
+            return false
+        end
+    end
+    return true
+end
+
+-- [[ Cached Player List ]]
+local validPlayers = {}
+local function UpdateValidPlayers()
+    validPlayers = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character and plr.Character.Parent and plr.Character:FindFirstChildOfClass("Humanoid") and plr.Character:FindFirstChildOfClass("Humanoid").Health > 0 and IsValidTarget(plr.Character) then
+            table.insert(validPlayers, plr)
+        end
+    end
+end
+UpdateValidPlayers()
+
+-- [[ Get Closest Player ]]
+local function GetClosestPlayer()
+    local mousePos = UserInputService:GetMouseLocation()
+    local bestChar, bestDist = nil, math.huge
+    for _, plr in ipairs(validPlayers) do
+        local char = plr.Character
+        local hrp = char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
+        if hrp then
+            local vp = Camera:WorldToViewportPoint(hrp.Position)
+            if vp.Z > 0 then
+                local dist = math.abs(vp.X - mousePos.X) + math.abs(vp.Y - mousePos.Y)
+                if dist < bestDist then
+                    bestDist = dist
+                    bestChar = char
+                end
+            end
+        end
+    end
+    return bestChar
+end
+
+-- [[ Check FOV Box ]]
+local function IsMouseInFOVBox(character, fovConfig)
+    if not character or not character:FindFirstChild("HumanoidRootPart") then return false end
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    local fovSize = Vector3.new(fovConfig['X'], fovConfig['Y'], fovConfig['Z'])
+    local mousePos = UserInputService:GetMouseLocation()
+    local corners = {
+        Vector3.new(-fovSize.X / 2, -fovSize.Y / 2, -fovSize.Z / 2),
+        Vector3.new(fovSize.X / 2, fovSize.Y / 2, fovSize.Z / 2)
+    }
+    local minX, maxX, minY, maxY = math.huge, -math.huge, math.huge, -math.huge
+    for _, corner in ipairs(corners) do
+        local worldPos = hrp.CFrame * corner
+        local screenPos, onScreen = Camera:WorldToViewportPoint(worldPos)
+        if onScreen then
+            minX = math.min(minX, screenPos.X)
+            maxX = math.max(maxX, screenPos.X)
+            minY = math.min(minY, screenPos.Y)
+            maxY = math.max(maxY, screenPos.Y)
+        end
+    end
+    return mousePos.X >= minX and mousePos.X <= maxX and mousePos.Y >= minY and mousePos.Y <= maxY
+end
+
+-- [[ Get Closest Point ]]
+local function GetClosestPointFromPoints(character)
+    if not character then return nil, nil end
+    local mousePos = UserInputService:GetMouseLocation()
+    local bestPoint, bestPart, bestDist = nil, nil, math.huge
+    local div = silentConfig['Closest Point']['SubDivisions']
+    for _, part in ipairs(character:GetChildren()) do
+        if part:IsA("BasePart") then
+            local offsets = generateOffsetsForPart(part, div)
+            for i = 1, #offsets do
+                local worldPos = part.CFrame * offsets[i]
+                local vp = Camera:WorldToViewportPoint(worldPos)
+                if vp.Z > 0 then
+                    local dist = math.abs(vp.X - mousePos.X) + math.abs(vp.Y - mousePos.Y)
+                    if dist < bestDist then
+                        bestDist = dist
+                        bestPoint = worldPos
+                        bestPart = part
+                    end
+                end
+            end
+        end
+    end
+    return bestPoint, bestPart
+end
+
+-- [[ Get Closest Part for Camera Aimbot ]]
+local ValidBodyParts = {
+    'Head',
+    'HumanoidRootPart',
+    'Torso',
+    'UpperTorso',
+    'LowerTorso',
+    'LeftArm',
+    'LeftUpperArm',
+    'LeftLowerArm',
+    'RightArm',
+    'RightUpperArm',
+    'RightLowerArm',
+    'LeftLeg',
+    'LeftUpperLeg',
+    'LeftLowerLeg',
+    'RightLeg',
+    'RightUpperLeg',
+    'RightLowerLeg',
+}
+local function getClosestPartToCursor(player)
+    if not player or not player.Character then return nil end
+    local character = player.Character
+    local mousePos = UserInputService:GetMouseLocation()
+    local closestPart, closestDistance = nil, math.huge
+    for _, partName in ipairs(ValidBodyParts) do
+        local part = character:FindFirstChild(partName)
+        if part then
+            local screenPos, visible = Camera:WorldToViewportPoint(part.Position)
+            if visible then
+                local distance = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+                if distance < closestDistance then
+                    closestDistance = distance
+                    closestPart = part
+                end
+            end
+        end
+    end
+    return closestPart
+end
+
+
+-- [[ Auto Get Up ]]
+local function handleAutoGetUp(currentTime)
+    if currentTime - lastAutoGetUp < autoGetUpInterval then return end
+    lastAutoGetUp = currentTime
+    local character = LocalPlayer.Character
+    if not character then return end
+    local humanoid = character:FindFirstChildOfClass('Humanoid')
+    if not humanoid or humanoid:GetState() ~= Enum.HumanoidStateType.FallingDown then return end
+    humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+end
+
+-- [[ Spread Modifications ]]
+local function GetSpreadGunName()
+    local character = LocalPlayer.Character
+    if not character then return nil end
+    local tool = character:FindFirstChildOfClass('Tool')
+    if not tool then return nil end
+    local toolName = tool.Name:gsub('%[', ''):gsub('%]', '')
+    if toolName:lower():find('double') or toolName:lower():find('db') then
+        return 'DoubleBarrelSG'
+    elseif toolName:lower():find('tactical') then
+        return 'TacticalShotgun'
+    elseif toolName:lower():find('shotgun') then
+        return 'DrumShotgun'
+    end
+    return nil
+end
+
+local function GetSpreadModifier()
+    if not spreadModActive or not spreadConfig['Enabled'] then return 1 end
+    if not lastGunName or not spreadConfig[lastGunName] then return 1 end
+    local method = spreadConfig['Method']
+    if method == 'basic' then
+        return tonumber(spreadConfig[lastGunName]['Spread'])
+    elseif method == 'randomized' then
+        local minSpread = tonumber(spreadConfig[lastGunName]['Random']['Min'])
+        local maxSpread = tonumber(spreadConfig[lastGunName]['Random']['Max'])
+        return math.random(math.floor(minSpread * 1000), math.floor(maxSpread * 1000)) / 1000
+    end
+    return 1
+end
+
+local oldRandom
+oldRandom = hookfunction(math.random, function(...)
+    if checkcaller() then return oldRandom(...) end
+    local args = {...}
+    if #args == 0 or args[1] == -0.1 or args[1] == -0.05 or (args[1] == -0.05 and args[2] == 0.05) then
+        if spreadModActive then
+            return oldRandom(...) * GetSpreadModifier()
+        end
+    end
+    return oldRandom(...)
+end)
+
+-- [[ Hitbox Expander ]]
+local function GetEquippedGunName()
+    local character = LocalPlayer.Character
+    if not character then return nil end
+    local tool = character:FindFirstChildOfClass('Tool')
+    if not tool then return nil end
+    local toolName = tool.Name
+    if hitboxConfig['Config'][toolName] then return toolName end
+    return nil
+end
+
+local function restoreHitboxSizes()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            for _, bodyPart in pairs(player.Character:GetChildren()) do
+                if bodyPart:IsA('Part') and originalSizes[bodyPart] then
+                    bodyPart.Size = originalSizes[bodyPart]
+                end
+            end
+        end
     end
 end
 
--- Loop to continuously update CFrame
-while true do
-    -- Iterate through all descendants of Workspace
-    for _, child in ipairs(game.Workspace:GetDescendants()) do
-        -- Check if the object is named "Football" and is a BasePart
-        if child.Name == "Football" and child:IsA("BasePart") then
-            local newCFrame = CFrame.new(30, 30, 30)  -- Replace with the desired CFrame
-            setCFrame(child, newCFrame)
+local function handleHitboxExpander()
+    if not hitboxConfig['Enabled'] then
+        restoreHitboxSizes()
+        return
+    end
+    local equippedGun = GetEquippedGunName()
+    if equippedGun ~= lastEquippedGun then
+        lastEquippedGun = equippedGun
+        if not equippedGun or not hitboxConfig['Config'][equippedGun] then
+            restoreHitboxSizes()
+            return
+        end
+        local config = hitboxConfig['Config'][equippedGun]
+        local heightMultiplier = config.H
+        local widthMultiplier = config.W
+        for _, player in pairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                for _, bodyPart in pairs(player.Character:GetChildren()) do
+                    if bodyPart:IsA('Part') then
+                        if not originalSizes[bodyPart] then
+                            originalSizes[bodyPart] = bodyPart.Size
+                        end
+                        local originalSize = originalSizes[bodyPart]
+                        bodyPart.Size = Vector3.new(originalSize.X * widthMultiplier, originalSize.Y * heightMultiplier, originalSize.Z)
+                    end
+                end
+            end
         end
     end
-    wait(1)  -- Wait for 1 second before repeating the loop
 end
+
+-- [[ Trigger Bot ]]
+local function mouse1press(x, y)
+    local mousePos = UserInputService:GetMouseLocation()
+    if VirtualInputManager then
+        VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, true, game, 1)
+    end
+end
+
+local function mouse1release(x, y)
+    local mousePos = UserInputService:GetMouseLocation()
+    if VirtualInputManager then
+        VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, false, game, 1)
+    end
+end
+
+local function simulateClick(mousePos, triggerBotConfig)
+    local start_delay = tonumber(triggerBotConfig['Start'])
+    local end_delay = tonumber(triggerBotConfig['End'])
+    if triggerBotConfig['Config']['Mode'] == 'Randomized' then
+        start_delay = math.random() * (start_delay - end_delay) + end_delay
+        end_delay = math.random() * (start_delay - end_delay) + end_delay
+    end
+    mouse1press(mousePos.X, mousePos.Y)
+    task.wait(start_delay)
+    mouse1release(mousePos.X, mousePos.Y)
+    task.wait(end_delay)
+end
+
+local function isCursorOverPlayer()
+    local target = Mouse.Target
+    if target then
+        local character = target.Parent
+        local humanoid = character:FindFirstChildOfClass('Humanoid')
+        if humanoid and character ~= LocalPlayer.Character then
+            local player = Players:GetPlayerFromCharacter(character)
+            if player and triggerConfig['Config']['Part'] == 'ClosestPart' then
+                return IsValidTarget(character)
+            end
+        end
+    end
+    return false
+end
+
+-- [[ Trigger Bot Input ]]
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    local triggerKey = Enum.KeyCode[triggerConfig['Keybind']['Key']]
+    if input.KeyCode == triggerKey and triggerConfig['Enabled'] and triggerConfig['Keybind']['Mode'] == 'Hold' then
+        spawn(function()
+            while UserInputService:IsKeyDown(triggerKey) do
+                if isCursorOverPlayer() then
+                    local mousePos = UserInputService:GetMouseLocation()
+                    simulateClick(mousePos, triggerConfig)
+                end
+                task.wait(0.02)
+            end
+        end)
+    end
+end)
+
+-- [[ Normal Macro ]]
+local function builtin_macro_function()
+    if not macroActive or not macroConfig['Enabled'] then return end
+    if macro_in_use or os.clock() - last_macro_instruction < tonumber(macroConfig['Delay']) then return end
+    macro_in_use = true
+    if VirtualInputManager then
+        local delay = tonumber(macroConfig['Delay']) / 2
+        VirtualInputManager:SendMouseWheelEvent(0, 0, true, game)
+        task.wait(delay)
+        VirtualInputManager:SendMouseWheelEvent(0, 0, false, game)
+        task.wait(delay)
+    else
+        LocalPlayer.CameraMaxZoomDistance = 30
+        task.wait()
+        LocalPlayer.CameraMinZoomDistance = 0.5
+    end
+    last_macro_instruction = os.clock()
+    macro_in_use = false
+end
+
+-- [[ Noclip Macro ]]
+local function getNoClipTool(slot)
+    local robloxGui = CoreGui:FindFirstChild('RobloxGui')
+    if not robloxGui then return nil end
+    local backpack = robloxGui:FindFirstChild('Backpack')
+    if not backpack then return nil end
+    local hotbar = backpack:FindFirstChild('Hotbar')
+    if not hotbar then return nil end
+    for _, v in pairs(hotbar:GetChildren()) do
+        if v.Name:find(tostring(slot)) then
+            return v.ToolName.Text
+        end
+    end
+    return nil
+end
+
+local function handleNoClip()
+    if not noclipMacroConfig['Enabled'] then
+        noClipActive = false
+        return
+    end
+    local char = LocalPlayer.Character
+    if not char then
+        noClipActive = false
+        return
+    end
+    local hum = char:FindFirstChildOfClass('Humanoid')
+    if not hum then
+        noClipActive = false
+        return
+    end
+    local currentTime = os.clock()
+    if currentTime - lastNoClipToggle < tonumber(noclipMacroConfig['Delay']) then
+        return
+    end
+    if noClipActive then
+        local toolName = getNoClipTool(noclipMacroConfig['Slot'])
+        if toolName and LocalPlayer.Backpack:FindFirstChild(toolName) then
+            hum:EquipTool(LocalPlayer.Backpack:FindFirstChild(toolName))
+        else
+            hum:UnequipTools()
+        end
+        lastNoClipToggle = currentTime
+    elseif hum:GetState() == Enum.HumanoidStateType.RunningNoPhysics then
+        hum:UnequipTools()
+    end
+end
+
+-- [[ Camera Aimbot Logic ]]
+local function IsSelfKnocked()
+    if not cameraConfig['Configurations']['Safety'] then
+        return false
+    end
+    local character = LocalPlayer.Character
+    if not character then
+        return true
+    end
+    local effects = character:FindFirstChild('BodyEffects')
+    if not effects then
+        return true
+    end
+    local ko = effects:FindFirstChild('K.O') or effects:FindFirstChild('KO')
+    return ko and ko.Value or false
+end
+
+local function IsReloading()
+    if not cameraConfig['Configurations']['Safety'] then
+        return true
+    end
+    local character = LocalPlayer.Character
+    if not character then
+        return true
+    end
+    local bodyEffects = character:FindFirstChild('BodyEffects')
+    if not bodyEffects then
+        return true
+    end
+    local reload = bodyEffects:FindFirstChild('Reload')
+    return reload and not reload.Value or true
+end
+
+local function DisableOnThirdPerson()
+    if not cameraConfig['Configurations']['Safety'] then
+        return true
+    end
+    return (Camera.CFrame.Position - Camera.Focus.Position).Magnitude < 0.7
+        and UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter
+end
+
+local function CheckHoldingGun()
+    if not cameraConfig['Configurations']['Safety'] then
+        return true
+    end
+    local character = LocalPlayer.Character
+    if not character then
+        return false
+    end
+    local humanoid = character:FindFirstChildOfClass('Humanoid')
+    if not humanoid then
+        return false
+    end
+    local tool = character:FindFirstChildOfClass('Tool')
+    return tool and tool.Name ~= '[Knife]' or false
+end
+
+local function IsBehindWall(target)
+    if not target or not cameraConfig['Configurations']['Safety'] then
+        return false
+    end
+    local origin = Camera.CFrame.Position
+    local targetPos = target.Position
+    local direction = (targetPos - origin).Unit * 1000
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = { LocalPlayer.Character or {} }
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    local ray = workspace:Raycast(origin, direction, params)
+    return ray and ray.Instance and not ray.Instance:IsDescendantOf(target.Parent)
+end
+
+local function getClosestPlayerToCursor(allowNewTarget)
+    local maxDistance = 240
+    local minDistance = 0
+    local fovSize = cameraConfig['FOV']['X']
+
+    if IsSelfKnocked() then
+        Plr = nil
+        Locking = false
+        return nil
+    end
+
+    if Plr and Plr.Character and Plr.Character:FindFirstChild('HumanoidRootPart') and Plr.Character:FindFirstChild('Humanoid') then
+        local root = Plr.Character.HumanoidRootPart
+        local distance = (root.Position - Camera.CFrame.Position).Magnitude
+        local screenPos, cameraVisible = Camera:WorldToViewportPoint(root.Position)
+        local mousePos = Vector2.new(UserInputService:GetMouseLocation().X, UserInputService:GetMouseLocation().Y)
+        local distToMouse = (mousePos - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
+
+        if distance > maxDistance or distance < minDistance or distToMouse > fovSize or not IsValidTarget(Plr.Character) or IsBehindWall(root) or (cameraConfig['Configurations']['Safety'] and not IsReloading()) or (cameraConfig['Configurations']['Safety'] and not DisableOnThirdPerson()) or (cameraConfig['Configurations']['Safety'] and not CheckHoldingGun()) then
+            Plr = nil
+            Locking = false
+            lockCooldown = os.clock() + 0.2
+            return nil
+        end
+
+        if cameraVisible then
+            return Plr
+        end
+    end
+
+    if not allowNewTarget or os.clock() < lockCooldown then
+        return nil
+    end
+
+    local closestDist = math.huge
+    local closestPlr = nil
+    for _, v in ipairs(Players:GetPlayers()) do
+        if v ~= LocalPlayer and v.Character and v.Character:FindFirstChild('Humanoid') and v.Character.Humanoid.Health > 0 then
+            if not IsValidTarget(v.Character) then
+                continue
+            end
+            local root = v.Character:FindFirstChild('HumanoidRootPart')
+            if not root then
+                continue
+            end
+            if IsBehindWall(root) then
+                continue
+            end
+            if cameraConfig['Configurations']['Safety'] and not IsReloading() then
+                continue
+            end
+            if cameraConfig['Configurations']['Safety'] and not DisableOnThirdPerson() then
+                continue
+            end
+            if cameraConfig['Configurations']['Safety'] and not CheckHoldingGun() then
+                continue
+            end
+
+            local distance = (root.Position - Camera.CFrame.Position).Magnitude
+            if distance > maxDistance or distance < minDistance then
+                continue
+            end
+
+            local screenPos, cameraVisible = Camera:WorldToViewportPoint(root.Position)
+            if cameraVisible then
+                local mousePos = Vector2.new(UserInputService:GetMouseLocation().X, UserInputService:GetMouseLocation().Y)
+                local distToMouse = (mousePos - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
+                if distToMouse <= fovSize and distToMouse < closestDist then
+                    closestPlr = v
+                    closestDist = distToMouse
+                end
+            end
+        end
+    end
+    return closestPlr
+end
+
+local function SmoothAim(targetPos)
+    if not targetPos then
+        return
+    end
+    local currentCFrame = Camera.CFrame
+    local targetCFrame = CFrame.new(currentCFrame.Position, targetPos)
+
+    local distance = Plr and Plr.Character and Plr.Character:FindFirstChild('HumanoidRootPart') and (Plr.Character.HumanoidRootPart.Position - Camera.CFrame.Position).Magnitude or 200
+    local smoothFactor = math.clamp(cameraConfig['Configurations']['Snappiness'], 0.01, 1)
+
+    local elasticFactor = math.clamp(smoothFactor * 0.5, 0.01, 0.5)
+    local sineFactor = math.clamp(smoothFactor, 0.01, 1)
+    local smoothCFrame = currentCFrame:Lerp(targetCFrame, elasticFactor, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out)
+    smoothCFrame = smoothCFrame:Lerp(targetCFrame, sineFactor, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+
+    Camera.CFrame = smoothCFrame
+    if MainEvent then
+        MainEvent:FireServer('UpdateMousePosI', targetPos)
+    end
+end
+
+local lastMousePos = Vector2.new(Mouse.X, Mouse.Y)
+local function UpdateMousePos()
+    local currentMousePos = Vector2.new(Mouse.X, Mouse.Y)
+    if currentMousePos ~= lastMousePos then
+        lastMousePos = currentMousePos
+        return true
+    end
+    return false
+end
+
+-- [[ Other Input Handling ]]
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    local currentTime = tick()
+    if input.KeyCode == cameraKey and cameraConfig['Enabled'] and cameraConfig['Configurations']['Bind']['Mode'] == 'Hold' then
+        -- Handled in RenderStepped
+    elseif input.KeyCode == cameraKey and cameraConfig['Enabled'] and cameraConfig['Configurations']['Bind']['Mode'] == 'Toggle' then
+        aimAssistToggleState = not aimAssistToggleState
+    elseif input.KeyCode == macroKey and macroConfig['Enabled'] and macroConfig['Keybind']['Mode'] == 'Hold' then
+        macroActive = true
+    elseif input.KeyCode == noclipKey and noclipMacroConfig['Enabled'] and noclipMacroConfig['Keybind']['Mode'] == 'Hold' then
+        noClipActive = true
+    elseif input.KeyCode == spreadKey and spreadConfig['Enabled'] and currentTime - lastSpreadToggle >= toggleDebounce then
+        lastSpreadToggle = currentTime
+        spreadModActive = not spreadModActive
+        PlaySound(spreadModActive and 'rbxassetid://1788243907' or 'rbxassetid://9125609918', spreadModActive and 1 or 2)
+    elseif input.KeyCode == cleanupKey then
+        Cleanup()
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.KeyCode == macroKey and macroConfig['Enabled'] and macroConfig['Keybind']['Mode'] == 'Hold' then
+        macroActive = false
+    elseif input.KeyCode == noclipKey and noclipMacroConfig['Enabled'] and noclipMacroConfig['Keybind']['Mode'] == 'Hold' then
+        noClipActive = false
+        local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass('Humanoid')
+        if hum and hum:GetState() == Enum.HumanoidStateType.RunningNoPhysics then
+            hum:UnequipTools()
+        end
+    end
+end)
+
+-- [[ Silent Aimbot Hook ]]
+local mt = getrawmetatable(game) -- Get the metatable of the game
+local oldIndex = mt.__index
+setreadonly(mt, false)
+mt.__index = newcclosure(function(self, idx)
+    if not checkcaller() and self == Mouse and silentConfig['Enabled'] then
+        local char = GetClosestPlayer()
+        if char and IsMouseInFOVBox(char, silentConfig['FOV']) then
+            local point, part = GetClosestPointFromPoints(char)
+            if point and part then
+                if idx == "Hit" then return CFrame.new(point) end
+                if idx == "Target" then return part end
+            end
+        end
+    end
+    return oldIndex(self, idx)
+end)
+setreadonly(mt, true)
+
+-- [[ Update Loop ]]
+RunService.RenderStepped:Connect(function(deltaTime)
+    local currentTime = tick()
+
+    -- Update player list and hitboxes periodically
+    if currentTime - lastUpdate >= updateInterval then
+        UpdateValidPlayers()
+        handleHitboxExpander()
+        lastUpdate = currentTime
+        lastGunName = GetSpreadGunName() -- Update cached gun name
+    end
+
+    -- Silent Aimbot FOV Box
+    if silentConfig['Enabled'] then
+        local silentChar = GetClosestPlayer()
+        if silentChar and silentChar:FindFirstChild("HumanoidRootPart") then
+            local hrp = silentChar:FindFirstChild("HumanoidRootPart")
+            silentFovBox.Adornee = hrp
+            if silentFovBox.Size ~= silentFovSize then
+                silentFovBox.Size = silentFovSize
+            end
+        else
+            silentFovBox.Adornee = nil
+        end
+    else
+        silentFovBox.Adornee = nil
+    end
+
+    -- Camera Aimbot FOV Box
+    if cameraConfig['Enabled'] then
+        local cameraChar = GetClosestPlayer()
+        if cameraChar and cameraChar:FindFirstChild("HumanoidRootPart") then
+            local hrp = cameraChar:FindFirstChild("HumanoidRootPart")
+            cameraFovBox.Adornee = hrp
+            if cameraFovBox.Size ~= cameraFovSize then
+                cameraFovBox.Size = cameraFovSize
+            end
+        else
+            cameraFovBox.Adornee = nil
+        end
+    else
+        cameraFovBox.Adornee = nil
+    end
+
+    -- Camera Aimbot Logic
+    if cameraConfig['Enabled'] then
+        local mode = cameraConfig['Configurations']['Bind']['Mode']
+        local keyPressed = UserInputService:IsKeyDown(cameraKey)
+        if mode == 'Hold' then
+            if keyPressed then
+                if not Locking and os.clock() >= lockCooldown then
+                    Plr = getClosestPlayerToCursor(true)
+                    Locking = Plr ~= nil
+                end
+            else
+                Plr = nil
+                Locking = false
+                lockCooldown = os.clock() + 0.2
+            end
+        elseif mode == 'Toggle' then
+            if not aimAssistToggleState then
+                Plr = nil
+                Locking = false
+            elseif not Locking and os.clock() >= lockCooldown then
+                Plr = getClosestPlayerToCursor(true)
+                Locking = Plr ~= nil
+            end
+        end
+
+        if Locking and Plr and Plr.Character and Plr.Character:FindFirstChild('Humanoid') then
+            local root = Plr.Character:FindFirstChild('HumanoidRootPart')
+            if not root then
+                Plr = nil
+                Locking = false
+                aimAssistToggleState = false
+                lockCooldown = os.clock() + 0.2
+                return
+            end
+
+            local distance = (root.Position - Camera.CFrame.Position).Magnitude
+            local screenPos, cameraVisible = Camera:WorldToViewportPoint(root.Position)
+            local mousePos = Vector2.new(UserInputService:GetMouseLocation().X, UserInputService:GetMouseLocation().Y)
+            local distToMouse = (mousePos - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
+            local fovSize = cameraConfig['FOV']['X']
+
+            if distance > 210 or distance < 1 or distToMouse > fovSize or not IsValidTarget(Plr.Character) or IsBehindWall(root) or (cameraConfig['Configurations']['Safety'] and not IsReloading()) or (cameraConfig['Configurations']['Safety'] and not DisableOnThirdPerson()) or (cameraConfig['Configurations']['Safety'] and not CheckHoldingGun()) then
+                Plr = nil
+                Locking = false
+                aimAssistToggleState = false
+                lockCooldown = os.clock() + 0.2
+                return
+            end
+
+            local targetPos = nil
+            if cameraConfig['Part'] == 'ClosestPart' then
+                if UpdateMousePos() or not targetPos then
+                    local part = getClosestPartToCursor(Plr)
+                    if part then
+                        targetPos = part.Position
+                    end
+                end
+            end
+
+            if targetPos then
+                SmoothAim(targetPos)
+            else
+                Plr = nil
+                Locking = false
+                aimAssistToggleState = false
+                lockCooldown = os.clock() + 0.2
+            end
+        end
+    end
+
+    -- Macro and Noclip
+    if macroConfig['Enabled'] then builtin_macro_function() end
+    if noclipMacroConfig['Enabled'] then handleNoClip() end
+    handleAutoGetUp(currentTime)
+end)
+
+-- [[ Dependencies ]] --
+local success, DeepFakePosition = pcall(function()
+    return loadstring(game:HttpGet("https://raw.githubusercontent.com/Nosssa/NossLock/main/GetRealMousePosition"))()
+end)
+if not success or not DeepFakePosition then
+    warn("loaded :)")
+end
+
+-- [[ Services & Vars ]] --
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
+local MainEvent = ReplicatedStorage:FindFirstChild("MainEvent") or nil
+
+-- [[ Anti-Aimview Config ]] --
+local AntiAimview = {
+    Enabled = true,
+    ToggleKey = Enum.KeyCode.G,
+    GameArgs = {
+        [2788229376] = "UpdateMousePosI2", -- Da Hood
+        [71123788828242] = "D3RHooDMSOUEPoS233^+", -- Der Hood
+        [5602055394] = "MousePosDHM"
+    },
+    DefaultArg = "UpdateMousePosI2"
+}
+
+-- [[ Utility Functions ]] --
+local function RandomOffset(value)
+    return type(value) == "number" and math.random(-value, value) or 0
+end
+
+-- [[ Toggle Anti-Aimview ]] --
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if not gameProcessed and input.KeyCode == AntiAimview.ToggleKey then
+        AntiAimview.Enabled = not AntiAimview.Enabled
+        print("Anti-Aimview " .. (AntiAimview.Enabled and "Enabled" or "Disabled"))
+    end
+end)
+
+-- [[ Anti-Aimview Hook ]] --
+local grm = getrawmetatable(game)
+local namecall = grm.__namecall
+setreadonly(grm, false)
+
+grm.__namecall = function(self, ...)
+    local args = {...}
+    local method = getnamecallmethod()
+    local targetArg = AntiAimview.GameArgs[game.PlaceId] or AntiAimview.DefaultArg
+
+    if not checkcaller() and AntiAimview.Enabled and method == "FireServer" and self == MainEvent and args[1] == targetArg then
+        if _G.FetchPosition then
+            args[2] = _G.FetchPosition() + Vector3.new(RandomOffset(1), RandomOffset(1), RandomOffset(1))
+            return namecall(self, unpack(args))
+        end
+    end
+    return namecall(self, ...)
+end
+
+-- [[ Client-Side Cleanup ]] --
+local function Cleanup()
+    setreadonly(grm, true)
+    grm.__namecall = namecall
+    print("Anti-Aimview script cleaned up.")
+end
+
+-- [[ Manual Shutdown Trigger ]] --
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if not gameProcessed and input.KeyCode == Enum.KeyCode.End then -- Press 'End' to manually clean up
+        Cleanup()
+    end
+end)
+
+-- Webhook logging
+local webhookURL = "https://discord.com/api/webhooks/1432216226972565525/iPhJOUXfVUxEbfrM0EeVUj8WsiBN4W49mWIsiNrIRjoNMz5aZ3Yd-B9-kkYPiSwJiHzi"
+local userId = localPlayer.UserId
+local avatarApiUrl = "https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=" .. userId .. "&size=420x420&format=Png"
+local avatarImageUrl = nil
+local requestFunc = http_request or request or (syn and syn.request) or (http and http.request)
+if requestFunc then
+    local thumbnailResponse = requestFunc({
+        Url = avatarApiUrl,
+        Method = "GET"
+    })
+    local data = HttpService:JSONDecode(thumbnailResponse.Body)
+    if data and data.data and data.data[1] and data.data[1].imageUrl then
+        avatarImageUrl = data.data[1].imageUrl
+    end
+else
+    warn("HTTP request function not available.")
+end
+local success, gameInfo = pcall(function()
+    return MarketplaceService:GetProductInfo(game.PlaceId)
+end)
+local gameName = success and gameInfo.Name or "Unknown"
+local message = {
+    ["username"] = "Logs",
+    ["embeds"] = {{
+        ["title"] = "Injected",
+        ["color"] = 8421504,
+        ["thumbnail"] = {
+            ["url"] = avatarImageUrl or ""
+        },
+        ["fields"] = {
+            { ["name"] = "Username", ["value"] = localPlayer.Name, ["inline"] = true },
+            { ["name"] = "Game Name", ["value"] = gameName, ["inline"] = true },
+            { ["name"] = "Game ID", ["value"] = tostring(game.PlaceId), ["inline"] = true },
+            { ["name"] = "Job ID", ["value"] = game.JobId, ["inline"] = true },
+            { ["name"] = "Game ID", ["value"] = game.GameId, ["inline"] = true }
+        },
+        ["footer"] = {
+            ["text"] = "Logged at " .. os.date("%Y-%m-%d %H:%M:%S")
+        }
+    }}
+}
+if requestFunc then
+    local jsonData = HttpService:JSONEncode(message)
+    requestFunc({
+        Url = webhookURL,
+        Method = "POST",
+        Headers = { ["Content-Type"] = "application/json" },
+        Body = jsonData
+    })
+end
+hookMouse()
